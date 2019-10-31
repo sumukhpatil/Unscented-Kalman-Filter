@@ -92,9 +92,9 @@ void UKF::Prediction(double delta_t) {
    */
 
    // Augmented state matrix
-   VectorXd x_aug = VectorXd(n_aug_0);
+   VectorXd x_aug = VectorXd(n_aug_);
    x_aug.fill(0);
-   x_aug.head(n_x_) = x;
+   x_aug.head(n_x_) = x_;
 
    // Process covariance matrix
    MatrixXd Q_ = MatrixXd(2, 2);
@@ -119,6 +119,8 @@ void UKF::Prediction(double delta_t) {
      X_sig.col(i + 1) = x_aug + sqrt(lambda_ + n_aug_) * A.col(i);
      X_sig.col(i + 1 + n_aug_) = x_aug - sqrt(lambda_ + n_aug_) * A.col(i);
    }
+
+   // Predicting Xsig matrix
    MatrixXd Xsig_pred_ = MatrixXd(n_x_, 2 * n_aug_ + 1);
    Xsig_pred_.fill(0);
    for (int i = 0; i < 2 * n_aug_ + 1; i++) {
@@ -128,13 +130,14 @@ void UKF::Prediction(double delta_t) {
      double psi = X_sig(3, i);
      double psi_d = X_sig(4, i);
 
+     double px_p, py_p;
      double v_p = v;
      double psi_p = psi + psi_d * delta_t;
      double psi_d_p = psi_d;
 
      if (fabs(psi_d) > 0.001) {
-       double px_p = px + ((v / psi_d) * (sin(psi + (psi_d * delta_t)) - sin(psi)));
-       double py_p = py + ((v / psi_d) * (-cos(psi + (psi_d * delta_t)) + cos(psi)));
+       px_p = px + ((v / psi_d) * (sin(psi + (psi_d * delta_t)) - sin(psi)));
+       py_p = py + ((v / psi_d) * (-cos(psi + (psi_d * delta_t)) + cos(psi)));
      } else {
        double px_p = px + (v * cos(psi * delta_t));
        double py_p = py + (v * sin(psi * delta_t));
@@ -150,7 +153,36 @@ void UKF::Prediction(double delta_t) {
      Xsig_pred_(1, i) = py_p;
      Xsig_pred_(2, i) = v_p;
      Xsig_pred_(3, i) = psi_p;
-     Xsig_pred_(4, i) = psi_d_p
+     Xsig_pred_(4, i) = psi_d_p;
+   }
+
+   // calculating state x
+   weights_ = VectorXd(2 * n_aug_ + 1);
+   weights_(0) = lambda_ / (lambda_ + n_aug_);
+   for (int i = 1; i < 2 * n_aug_ + 1; i++) {
+     weights_(i) = 0.5 / (lambda_ + n_aug_);
+   }
+   double px_m, py_m, v_m, psi_m, psi_d_m = 0;
+   for (int i = 0; i < 2 * n_aug_ + 1; i++) {
+     px_m = px_m + (weights_(i) * Xsig_pred_(0, i));
+     py_m = py_m + (weights_(i) * Xsig_pred_(1, i));
+     v_m = v_m + (weights_(i) * Xsig_pred_(2, i));
+     psi_m = psi_m + (weights_(i) * Xsig_pred_(3, i));
+     psi_d_m = psi_d_m + (weights_(i) * Xsig_pred_(4, i));
+   }
+   x_(0) = px_m;
+   x_(1) = py_m;
+   x_(2) = v_m;
+   x_(3) = psi_m;
+   x_(4) = psi_d_m;
+
+   // calculating state covariance
+   for (int i = 0; i < 2 * n_aug_ + 1; i++) {
+     VectorXd x_diff = VectorXd(n_x_);
+     x_diff = Xsig_pred_.col(i) - x_;
+     while (x_diff(3) > M_PI) x_diff(3) = x_diff(3) - 2 * M_PI;
+     while (x_diff(3) < -M_PI) x_diff(3) = x_diff(3) + 2 * M_PI;
+     P_ = P_ + weights_(i) * x_diff * x_diff.transpose();
    }
 }
 
