@@ -202,4 +202,79 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
    * covariance, P_.
    * You can also calculate the radar NIS, if desired.
    */
+   double n_z_radar = 3;
+   MatrixXd Z_Sig = MatrixXd(n_z_radar, 2 * n_aug_ + 1);
+   VectorXd z_pred = VectorXd(n_z_radar);
+   MatrixXd S = MatrixXd(n_z_radar, n_z_radar);
+   S.fill(0);
+
+   double _rho, phi, _rho_dot = 0;
+   for (int i = 0; i < 2 * n_aug_ + 1; i++) {
+     double px = Xsig_pred_(0, i);
+     double py = Xsig_pred_(1, i);
+     double v = Xsig_pred_(2, i);
+     double psi = Xsig_pred_(3, i);
+     double psi_d = Xsig_pred_(4, i);
+
+     _rho = sqrt(px * px + py * py);
+     phi = atan2(py, px);
+     _rho_dot = ((px * cos(psi) * v) + (py * sin(psi) * v)) / sqrt(px * px + py * py);
+     Z_Sig(0, i) = _rho;
+     Z_Sig(1, i) = phi;
+     Z_Sig(2, i) = _rho_dot;
+   }
+   z_pred.fill(0);
+   double rho_m, phi_m, rho_d_m = 0;
+   for (int i = 0; i < 2 * n_aug_ + 1; i++) {
+        rho_m = rho_m + (weights_(i) * Z_Sig(0, i));
+        phi_m = phi_m + (weights_(i) * Z_Sig(1, i));
+        rho_d_m = rho_d_m + (weights_(i) * Z_Sig(2, i));
+   }
+   z_pred(0) = rho_m;
+   z_pred(1) = phi_m;
+   z_pred(2) = rho_d_m;
+
+   for (int i = 0; i < 2 * n_aug_ + 1; i++) {
+     VectorXd z_diff = VectorXd(n_z_radar);
+     z_diff = Z_Sig.col(i) - z_pred;
+     while (z_diff(1) > M_PI) z_diff(1) = z_diff(1) - 2 * M_PI;
+     while (z_diff(1) < -M_PI) z_diff(1) = z_diff(1) + 2 * M_PI;
+     S = S + (weights_(i) * z_diff * z_diff.transpose());
+   }
+   MatrixXd R = MatrixXd(n_z_radar, n_z_radar);
+   R << std_radr_ * std_radr_, 0, 0,
+        0, std_radphi_ * std_radphi_, 0,
+        0, 0, std_radrd_ * std_radrd_;
+   S = S + R;
+
+   MatrixXd T = MatrixXd(n_x_, n_z_radar);
+   T.fill(0);
+   VectorXd Tx_diff = VectorXd(n_x_);
+   VectorXd Tz_diff = VectorXd(n_z_radar);
+   for (int i = 0; i < 2 * n_aug_ + 1; i++){
+     Tx_diff = Xsig_pred_.col(i) - x_;
+     Tz_diff = Z_Sig.col(i) - z_pred;
+     while (Tx_diff(3) > M_PI) Tx_diff(3) = Tx_diff(3) - 2 * M_PI;
+     while (Tx_diff(3) < -M_PI) Tx_diff(3) = Tx_diff(3) + 2 * M_PI;
+     while (Tz_diff(1) > M_PI) Tz_diff(1) = Tz_diff(1) - 2 * M_PI;
+     while (Tz_diff(1) < -M_PI) Tz_diff(1) = Tz_diff(1) + 2 * M_PI;
+     T = T + (weights_(i) * Tx_diff * Tz_diff.transpose());
+   }
+
+   // Calculating Kalman Gain
+   MatrixXd K = MatrixXd(n_x_, n_z_radar);
+   K.fill(0);
+   K = T * S.inverse();
+   VectorXd diff_z = VectorXd(n_z_radar);
+   diff_z.fill(0);
+   diff_z = meas_package.raw_measurements_ - z_pred;
+   while (diff_z(1) > M_PI) diff_z(1) = diff_z(1) - 2 * M_PI;
+   while (diff_z(1) < -M_PI) diff_z(1) = diff_z(1) - 2 * M_PI;
+
+   // Updated state
+   x_ = x_ + K * diff_z;
+
+   // Updated covariance
+   P_ = P_ - (K * S * K.transpose());
+
 }
