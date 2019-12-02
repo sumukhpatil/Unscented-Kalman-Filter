@@ -1,5 +1,11 @@
 #include "ukf.h"
 #include "Eigen/Dense"
+/*
+Libraries for debugging
+*/
+// ---------------------------------------------------------------------------
+#include <iostream>
+// ---------------------------------------------------------------------------
 
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
@@ -19,11 +25,6 @@ UKF::UKF() {
 
   // initial covariance matrix
   P_ = MatrixXd(5, 5);
-  P_ << 1, 0, 0, 0, 0,
-        0, 1, 0, 0, 0,
-        0, 0, 1000, 0, 0,
-        0, 0, 0, 1, 0,
-        0, 0, 0, 0, 1000;
 
   // Process noise standard deviation longitudinal acceleration in m/s^2
   std_a_ = 30;
@@ -60,9 +61,12 @@ UKF::UKF() {
    * Hint: one or more values initialized above might be wildly off...
    */
 
-   int n_x_ = 5;
-   int n_aug_ = n_x_ + 2;
-   double lambda_ = 3 - n_aug_;
+   n_x_ = 5;
+   n_aug_ = n_x_ + 2;
+   lambda_ = 3 - n_aug_;
+   Xsig_pred_ = MatrixXd(n_x_, 2 * n_aug_ + 1);
+   weights_ = VectorXd(2 * n_aug_ + 1);
+   time_us_ = 0;
 }
 
 UKF::~UKF() {}
@@ -73,6 +77,11 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
    * measurements.
    */
    if (!is_initialized_) {
+     P_ << 1, 0, 0, 0, 0,
+           0, 1, 0, 0, 0,
+           0, 0, 1, 0, 0,
+           0, 0, 0, 1, 0,
+           0, 0, 0, 0, 1;
      if (meas_package.sensor_type_ == MeasurementPackage::RADAR) {
        double rho = meas_package.raw_measurements_[0];
        double phi = meas_package.raw_measurements_[1];
@@ -111,58 +120,55 @@ void UKF::Prediction(double delta_t) {
    x_aug.fill(0);
    x_aug.head(n_x_) = x_;
 
-   // Process covariance matrix
+   // Augmented state covariance matrix
+   MatrixXd P_aug = MatrixXd(n_aug_, n_aug_);
+   P_aug.fill(0);
    MatrixXd Q_ = MatrixXd(2, 2);
    Q_ << std_a_ * std_a_, 0,
          0, std_yawdd_ * std_yawdd_;
-
-   // Augmented covariance matrix
-   MatrixXd P_aug = MatrixXd(n_aug_, n_aug_);
-   P_aug.fill(0);
    P_aug.topLeftCorner(n_x_, n_x_) = P_;
    P_aug.bottomRightCorner(2, 2) = Q_;
 
-   // Augmented sigma points
-   MatrixXd X_sig = MatrixXd(n_aug_, 2 * n_aug_ + 1);
-   X_sig.fill(0);
-   X_sig.col(0) = x_aug;
+   // Generating sigma points
+   MatrixXd Xsig = MatrixXd(n_aug_, 2 * n_aug_ + 1);
+   Xsig.fill(0);
+   Xsig.col(0) = x_aug;
 
-   // square root matrix
+   // Calculating square root of P_aug
    MatrixXd A = MatrixXd(n_aug_, n_aug_);
    A = P_aug.llt().matrixL();
+
    for (int i = 0; i < n_aug_; i++) {
-     X_sig.col(i + 1) = x_aug + sqrt(lambda_ + n_aug_) * A.col(i);
-     X_sig.col(i + 1 + n_aug_) = x_aug - sqrt(lambda_ + n_aug_) * A.col(i);
+     Xsig.col(i + 1)          = x_aug + sqrt(lambda_ + n_aug_) * A.col(i);
+     Xsig.col(i + 1 + n_aug_) = x_aug - sqrt(lambda_ + n_aug_) * A.col(i);
    }
 
-   // Predicting Xsig matrix
-   MatrixXd Xsig_pred_ = MatrixXd(n_x_, 2 * n_aug_ + 1);
+   // Predicting Sigma points
    Xsig_pred_.fill(0);
    for (int i = 0; i < 2 * n_aug_ + 1; i++) {
-     double px = X_sig(0, i);
-     double py = X_sig(1, i);
-     double v = X_sig(2, i);
-     double psi = X_sig(3, i);
-     double psi_d = X_sig(4, i);
+     double px = Xsig(0, i);
+     double py = Xsig(1, i);
+     double v = Xsig(2, i);
+     double psi = Xsig(3, i);
+     double psi_d = Xsig(4, i);
 
      double px_p, py_p;
      double v_p = v;
-     double psi_p = psi + psi_d * delta_t;
+     double psi_p = psi + (psi_d * delta_t);
      double psi_d_p = psi_d;
 
      if (fabs(psi_d) > 0.001) {
        px_p = px + ((v / psi_d) * (sin(psi + (psi_d * delta_t)) - sin(psi)));
-       py_p = py + ((v / psi_d) * (-cos(psi + (psi_d * delta_t)) + cos(psi)));
+       py_p = py + ((v / psi_d) * (- cos(psi + (psi_d * delta_t)) + cos(psi)));
      } else {
-       double px_p = px + (v * cos(psi * delta_t));
-       double py_p = py + (v * sin(psi * delta_t));
+       px_p = px + (v * cos(psi) * delta_t);
+       py_p = py + (v * sin(psi) * delta_t);
      }
-
-     px_p = px_p + (0.5 * delta_t * delta_t * cos(psi) * X_sig(5, i));
-     py_p = py_p + (0.5 * delta_t * delta_t * sin(psi) * X_sig(5, i));
-     v_p = v_p + (delta_t * X_sig(i, 5));
-     psi_p = psi_p + (0.5 * delta_t * delta_t * X_sig(6, i));
-     psi_d_p = psi_d_p + (delta_t * X_sig(6, i));
+     px_p = px_p + (0.5 * delta_t * delta_t * cos(psi) * Xsig(5, i));
+     py_p = py_p + (0.5 * delta_t * delta_t * sin(psi) * Xsig(5, i));
+     v_p = v_p + (delta_t * Xsig(5, i));
+     psi_p = psi_p + (0.5 * delta_t * delta_t * Xsig(6, i));
+     psi_d_p = psi_d_p + (delta_t * Xsig(6, i));
 
      Xsig_pred_(0, i) = px_p;
      Xsig_pred_(1, i) = py_p;
@@ -171,33 +177,23 @@ void UKF::Prediction(double delta_t) {
      Xsig_pred_(4, i) = psi_d_p;
    }
 
-   // calculating state x
-   weights_ = VectorXd(2 * n_aug_ + 1);
+   // Calculating state x
    weights_(0) = lambda_ / (lambda_ + n_aug_);
    for (int i = 1; i < 2 * n_aug_ + 1; i++) {
      weights_(i) = 0.5 / (lambda_ + n_aug_);
    }
-   double px_m, py_m, v_m, psi_m, psi_d_m = 0;
+   x_.fill(0);
    for (int i = 0; i < 2 * n_aug_ + 1; i++) {
-     px_m = px_m + (weights_(i) * Xsig_pred_(0, i));
-     py_m = py_m + (weights_(i) * Xsig_pred_(1, i));
-     v_m = v_m + (weights_(i) * Xsig_pred_(2, i));
-     psi_m = psi_m + (weights_(i) * Xsig_pred_(3, i));
-     psi_d_m = psi_d_m + (weights_(i) * Xsig_pred_(4, i));
+     x_ = x_ + weights_(i) * Xsig_pred_.col(i);
    }
-   x_(0) = px_m;
-   x_(1) = py_m;
-   x_(2) = v_m;
-   x_(3) = psi_m;
-   x_(4) = psi_d_m;
 
-   // calculating state covariance
+   // Calculating state covariance
+   P_.fill(0);
    for (int i = 0; i < 2 * n_aug_ + 1; i++) {
-     VectorXd x_diff = VectorXd(n_x_);
-     x_diff = Xsig_pred_.col(i) - x_;
+     VectorXd x_diff = Xsig_pred_.col(i) - x_;
      while (x_diff(3) > M_PI) x_diff(3) = x_diff(3) - 2 * M_PI;
      while (x_diff(3) < -M_PI) x_diff(3) = x_diff(3) + 2 * M_PI;
-     P_ = P_ + weights_(i) * x_diff * x_diff.transpose();
+     P_ = P_ + (weights_(i) * x_diff * (x_diff.transpose()));
    }
 }
 
